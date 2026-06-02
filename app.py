@@ -62,7 +62,7 @@ def process(file1, file2, file3):
     df = pd.read_csv(
         file1,
         skiprows=header_row,
-        dtype={"X Author ID": str, "Bluesky Author Id": str},
+        dtype={"Date": str, "X Author ID": str, "Bluesky Author Id": str},
         low_memory=False,
     )
     missing = [c for c in BW_KEEP_COLUMNS if c not in df.columns]
