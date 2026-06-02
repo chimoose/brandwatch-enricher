@@ -3,19 +3,18 @@ import pandas as pd
 import streamlit as st
 
 OUTPUT_COLUMNS = [
-    "Date", "Snippet", "Url", "Author", "Expanded URLs", "Mentioned Authors",
-    "Thread Author", "Thread Entry Type", "Twitter Author ID", "Twitter Followers",
-    "Twitter Reply Count", "Twitter Reply to", "Twitter Retweet of", "Twitter Retweets",
-    "Twitter Likes", "Engagement Score", "Name", "Institution", "NPI", "DOL Yes/No",
+    "Date", "Url", "Domain", "Author", "Likes", "Comments", "Shares", "Full Text",
+    "Mentioned Authors", "Thread Author", "Thread Entry Type", "X Author ID", "X Followers",
+    "Engagement Score", "Bluesky Author Id", "Name", "Institution", "NPI", "DOL Yes/No",
     "DOL Profile", "Lilly KOL", "Validated US?", "Continent", "Country", "State",
     "City", "Specialty 1", "Specialty 2",
 ]
 
+# Columns to keep from the incoming Brandwatch CSV
 BW_KEEP_COLUMNS = [
-    "Date", "Snippet", "Url", "Author", "Expanded URLs", "Mentioned Authors",
-    "Thread Author", "Thread Entry Type", "Twitter Author ID", "Twitter Followers",
-    "Twitter Reply Count", "Twitter Reply to", "Twitter Retweet of", "Twitter Retweets",
-    "Twitter Likes", "Engagement Score",
+    "Date", "Url", "Domain", "Author", "Likes", "Comments", "Shares", "Full Text",
+    "Mentioned Authors", "Thread Author", "Thread Entry Type", "X Author ID", "X Followers",
+    "Engagement Score", "Bluesky Author Id",
 ]
 
 
@@ -43,23 +42,36 @@ def find_header_row(file) -> int:
     raw = file.read().decode("utf-8", errors="replace")
     file.seek(0)
     for i, row in enumerate(csv.reader(_io.StringIO(raw))):
-        if "Date" in row and "Author" in row and "Snippet" in row:
+        # Header row should contain Date and Author, and at least one of
+        # Snippet/Full Text/Url to be flexible with formats.
+        lowered = [c.strip() for c in row]
+        if "Date" in lowered and "Author" in lowered and (
+            "Snippet" in lowered or "Full Text" in lowered or "Url" in lowered
+        ):
             return i
     raise ValueError(
         "Could not find the header row in File 1. "
-        "Expected a row containing 'Date', 'Author', and 'Snippet'."
+        "Expected a row containing 'Date' and 'Author' (and 'Snippet' or 'Full Text' or 'Url')."
     )
 
 
 def process(file1, file2, file3):
     # --- File 1: Brandwatch ---
     header_row = find_header_row(file1)
-    df = pd.read_csv(file1, skiprows=header_row, dtype={"Twitter Author ID": str}, low_memory=False)
+    # read as strings for ID columns to preserve large ints
+    df = pd.read_csv(
+        file1,
+        skiprows=header_row,
+        dtype={"X Author ID": str, "Bluesky Author Id": str},
+        low_memory=False,
+    )
     missing = [c for c in BW_KEEP_COLUMNS if c not in df.columns]
     if missing:
         raise ValueError(f"File 1 is missing expected columns: {missing}")
     df = df[BW_KEEP_COLUMNS].copy()
-    df["_handle"] = df["Author"].str.lower().str.strip()
+    # normalize author handle for lookups
+    df["_handle"] = df["Author"].astype(str).str.lower().str.strip()
+    df["_domain"] = df["Domain"].astype(str).str.lower().str.strip()
 
     # --- File 2: DOL/KOL lookup ---
     dol = pd.read_csv(file2, low_memory=False)
@@ -74,7 +86,17 @@ def process(file1, file2, file3):
 
     # --- File 3: Physician metadata ---
     meta = pd.read_csv(file3, low_memory=False)
-    meta["_handle"] = meta["Twitter Handle"].str.lower().str.strip()
+    # Support both Twitter and Bluesky handles in physician metadata
+    meta_cols = list(meta.columns)
+    if "Twitter Handle" in meta_cols:
+        meta["_twitter_handle"] = meta["Twitter Handle"].astype(str).str.lower().str.strip()
+    else:
+        meta["_twitter_handle"] = ""
+    # Use Bluesky Handle for BlueSky lookups
+    if "Bluesky Handle" in meta_cols:
+        meta["_bluesky_handle"] = meta["Bluesky Handle"].astype(str).str.lower().str.strip()
+    else:
+        meta["_bluesky_handle"] = ""
     meta["Name"] = meta.apply(build_name, axis=1)
     meta["Validated US?"] = meta["Country"].apply(
         lambda c: "Yes" if str(c).strip() == "United States" else "No"
@@ -83,14 +105,48 @@ def process(file1, file2, file3):
         "Medical Specialty 1": "Specialty 1",
         "Medical Specialty 2": "Specialty 2",
     })
-    meta_cols = ["_handle", "Name", "Institution", "NPI", "Validated US?",
-                 "Continent", "Country", "State", "City", "Specialty 1", "Specialty 2"]
-    meta = meta[meta_cols].drop_duplicates("_handle")
+    meta_select = ["Name", "Institution", "NPI", "Validated US?",
+                   "Continent", "Country", "State", "City", "Specialty 1", "Specialty 2",
+                   "_twitter_handle", "_bluesky_handle"]
+    for c in meta_select:
+        if c not in meta.columns:
+            meta[c] = ""
+    meta = meta[meta_select].drop_duplicates(["_twitter_handle", "_bluesky_handle"]) 
 
-    df = df.merge(meta, on="_handle", how="left")
+    # First, merge on Twitter handle (if present)
+    df = df.merge(
+        meta.drop(columns=["_bluesky_handle"]).rename(columns={"_twitter_handle": "_handle"}),
+        on="_handle",
+        how="left",
+    )
+
+    # For BlueSky rows where we didn't find a match, try matching on bluesky handle
+    is_bluesky = df["_domain"].fillna("").str.lower() == "bsky.app"
+    missing_name = df["Name"].isna() | (df["Name"] == "")
+    need_bluesky_lookup = is_bluesky & missing_name
+    if need_bluesky_lookup.any():
+        # build a lookup from bluesky handle to metadata
+        bsky_lookup = meta.set_index("_bluesky_handle")[ ["Name", "Institution", "NPI", "Validated US?",
+                                                           "Continent", "Country", "State", "City",
+                                                           "Specialty 1", "Specialty 2"] ]
+        # normalize df author to bluesky handle and lookup
+        df_bsky_handles = df.loc[need_bluesky_lookup, "_handle"].fillna("")
+        looked = df_bsky_handles.str.lower().str.strip().map(lambda h: bsky_lookup.loc[h].to_dict() if h in bsky_lookup.index else None)
+        # fill missing fields
+        for idx, val in looked.items():
+            if val:
+                for k, v in val.items():
+                    df.at[idx, k] = v
 
     # Validated US? defaults to No for unmatched rows
     df["Validated US?"] = df["Validated US?"].fillna("No")
+
+    # --- Remove unmatched BlueSky posts ---
+    # BlueSky posts without a match in physician metadata should be deleted
+    is_bluesky = df["_domain"].fillna("").str.lower() == "bsky.app"
+    has_name = df["Name"].notna() & (df["Name"] != "")
+    unmatched_bluesky = is_bluesky & ~has_name
+    df = df[~unmatched_bluesky].copy()
 
     # --- Final output ---
     for col in OUTPUT_COLUMNS:
