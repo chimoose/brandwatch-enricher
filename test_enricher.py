@@ -1,24 +1,14 @@
+#!/usr/bin/env python3
+"""
+Test script for enricher pipeline (without streamlit).
+"""
 import io
 import pandas as pd
-import streamlit as st
+import sys
 
-OUTPUT_COLUMNS = [
-    "Date", "Url", "Domain", "Author", "Likes", "Comments", "Shares", "Full Text",
-    "Mentioned Authors", "Thread Author", "Thread Entry Type", "X Author ID", "X Followers",
-    "Engagement Score", "Bluesky Author Id", "Name", "Institution", "NPI", "DOL Yes/No",
-    "DOL Profile", "Lilly KOL", "Validated US?", "Continent", "Country", "State",
-    "City", "Specialty 1", "Specialty 2",
-]
-
-INPUT_NOT_AVAILABLE = "input not available"
-
-# Columns to keep from the incoming Brandwatch CSV
-BW_KEEP_COLUMNS = [
-    "Date", "Url", "Domain", "Author", "Likes", "Comments", "Shares", "Full Text",
-    "Mentioned Authors", "Thread Author", "Thread Entry Type", "X Author ID", "X Followers",
-    "Engagement Score", "Bluesky Author Id",
-]
-
+# Import processing logic from app (will skip streamlit bits)
+import csv
+import io as _io
 
 def clean(val) -> str:
     """Return stripped string, treating NaN/None/float-nan as empty."""
@@ -40,12 +30,9 @@ def build_name(row):
 
 def find_header_row(file) -> int:
     """Return the 0-based row index that contains the Brandwatch column headers."""
-    import csv, io as _io
     raw = file.read().decode("utf-8", errors="replace")
     file.seek(0)
     for i, row in enumerate(csv.reader(_io.StringIO(raw))):
-        # Header row should contain Date and Author, and at least one of
-        # Snippet/Full Text/Url to be flexible with formats.
         lowered = [c.strip() for c in row]
         if "Date" in lowered and "Author" in lowered and (
             "Snippet" in lowered or "Full Text" in lowered or "Url" in lowered
@@ -57,53 +44,59 @@ def find_header_row(file) -> int:
     )
 
 
-def read_brandwatch_csv(file, file_label):
-    if file is None:
+INPUT_NOT_AVAILABLE = "input not available"
+
+OUTPUT_COLUMNS = [
+    "Date", "Url", "Domain", "Author", "Likes", "Comments", "Shares", "Full Text",
+    "Mentioned Authors", "Thread Author", "Thread Entry Type", "X Author ID", "X Followers",
+    "Engagement Score", "Bluesky Author Id", "Name", "Institution", "NPI", "DOL Yes/No",
+    "DOL Profile", "Lilly KOL", "Validated US?", "Continent", "Country", "State",
+    "City", "Specialty 1", "Specialty 2",
+]
+
+BW_KEEP_COLUMNS = [
+    "Date", "Url", "Domain", "Author", "Likes", "Comments", "Shares", "Full Text",
+    "Mentioned Authors", "Thread Author", "Thread Entry Type", "X Author ID", "X Followers",
+    "Engagement Score", "Bluesky Author Id",
+]
+
+
+def read_brandwatch_csv(file_path, file_label):
+    if file_path is None:
         return None
-    header_row = find_header_row(file)
+    with open(file_path, "rb") as f:
+        header_row = find_header_row(f)
     df = pd.read_csv(
-        file,
+        file_path,
         skiprows=header_row,
         dtype={"Date": str, "X Author ID": str, "Bluesky Author Id": str},
         low_memory=False,
     )
-    # Support alternate Brandwatch field naming
     if "Full Text" not in df.columns and "Snippet" in df.columns:
         df = df.rename(columns={"Snippet": "Full Text"})
-
     missing = [c for c in BW_KEEP_COLUMNS if c not in df.columns]
     if missing:
         raise ValueError(f"{file_label} is missing expected columns: {missing}")
     return df[BW_KEEP_COLUMNS].copy()
 
 
-def process(bw_x_file=None, bw_bsky_file=None, lookup_file=None, meta_file=None):
-    # --- Brandwatch source files ---
-    x_df = read_brandwatch_csv(bw_x_file, "Brandwatch X CSV")
-    bsky_df = read_brandwatch_csv(bw_bsky_file, "Brandwatch Bluesky CSV")
+def process(file1_path, file2_path=None, file3_path=None, file4_path=None):
+    x_df = read_brandwatch_csv(file1_path, "Brandwatch X CSV")
+    bsky_df = read_brandwatch_csv(file2_path, "Brandwatch Bluesky CSV")
     if x_df is None and bsky_df is None:
         raise ValueError("At least one Brandwatch input file is required.")
+    df = x_df.copy() if bsky_df is None else (bsky_df.copy() if x_df is None else pd.concat([x_df, bsky_df], ignore_index=True))
 
-    if x_df is None:
-        df = bsky_df.copy()
-    elif bsky_df is None:
-        df = x_df.copy()
-    else:
-        df = pd.concat([x_df, bsky_df], ignore_index=True)
-
-    # normalize author handle for lookups
     df["_handle"] = df["Author"].astype(str).str.lower().str.strip()
     df["_domain"] = df["Domain"].astype(str).str.lower().str.strip()
 
-    # --- DOL/KOL lookup ---
-    if lookup_file is not None:
-        dol = pd.read_csv(lookup_file, low_memory=False)
+    if file3_path is not None:
+        dol = pd.read_csv(file3_path, low_memory=False)
         if "Twitter Handle" not in dol.columns:
             raise ValueError("DOL/KOL lookup file must contain a 'Twitter Handle' column.")
         dol["_handle"] = dol["Twitter Handle"].astype(str).str.lower().str.strip()
         dol = dol.rename(columns={"KOL": "Lilly KOL", "DOL": "DOL Yes/No"})
         dol = dol[["_handle", "DOL Yes/No", "DOL Profile", "Lilly KOL"]].drop_duplicates("_handle")
-
         df = df.merge(dol, on="_handle", how="left")
         df["DOL Yes/No"] = df["DOL Yes/No"].fillna("No")
         df["DOL Profile"] = df["DOL Profile"].fillna("N/A")
@@ -113,9 +106,8 @@ def process(bw_x_file=None, bw_bsky_file=None, lookup_file=None, meta_file=None)
         df["DOL Profile"] = INPUT_NOT_AVAILABLE
         df["Lilly KOL"] = INPUT_NOT_AVAILABLE
 
-    # --- Physician metadata ---
-    if meta_file is not None:
-        meta = pd.read_csv(meta_file, low_memory=False)
+    if file4_path is not None:
+        meta = pd.read_csv(file4_path, low_memory=False)
         meta_cols = list(meta.columns)
         if "Twitter Handle" in meta_cols:
             meta["_twitter_handle"] = meta["Twitter Handle"].astype(str).str.lower().str.strip()
@@ -140,7 +132,6 @@ def process(bw_x_file=None, bw_bsky_file=None, lookup_file=None, meta_file=None)
             if c not in meta.columns:
                 meta[c] = ""
         meta = meta[meta_select].drop_duplicates(["_twitter_handle", "_bluesky_handle"])
-
         df = df.merge(
             meta.drop(columns=["_bluesky_handle"]).rename(columns={"_twitter_handle": "_handle"}),
             on="_handle",
@@ -162,7 +153,6 @@ def process(bw_x_file=None, bw_bsky_file=None, lookup_file=None, meta_file=None)
                 if val:
                     for k, v in val.items():
                         df.at[idx, k] = v
-
         df["Validated US?"] = df["Validated US?"].fillna("No")
         is_bluesky = df["_domain"].fillna("").str.lower() == "bsky.app"
         has_name = df["Name"].notna() & (df["Name"] != "")
@@ -180,61 +170,34 @@ def process(bw_x_file=None, bw_bsky_file=None, lookup_file=None, meta_file=None)
         df["Specialty 1"] = INPUT_NOT_AVAILABLE
         df["Specialty 2"] = INPUT_NOT_AVAILABLE
 
-    # --- Final output ---
     for col in OUTPUT_COLUMNS:
         if col not in df.columns:
             df[col] = INPUT_NOT_AVAILABLE if col in ["DOL Yes/No", "DOL Profile", "Lilly KOL",
                                                     "Name", "Institution", "NPI", "Validated US?",
                                                     "Continent", "Country", "State", "City",
                                                     "Specialty 1", "Specialty 2"] else ""
-
     return df[OUTPUT_COLUMNS]
 
 
-def to_excel_bytes(df):
-    buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="Enriched")
-    return buf.getvalue()
-
-
-# ---------------------------------------------------------------------------
-# UI
-# ---------------------------------------------------------------------------
-st.set_page_config(page_title="Brandwatch Enricher", layout="centered")
-st.title("Brandwatch Post Enricher")
-
-st.markdown(
-    "Upload at least one Brandwatch file. DOL/KOL Lookup and Physician Metadata files are optional. "
-    "Missing lookup or metadata data will be marked as 'input not available'."
-)
-
-col1, col2, col3, col4 = st.columns(4)
-with col1:
-    file_bw_x = st.file_uploader("Brandwatch X CSV", type=["csv"], key="bw_x")
-with col2:
-    file_bw_bsky = st.file_uploader("Brandwatch Bluesky CSV", type=["csv"], key="bw_bsky")
-with col3:
-    file_dol = st.file_uploader("DOL/KOL Lookup CSV (optional)", type=["csv"], key="dol")
-with col4:
-    file_meta = st.file_uploader("Physician Metadata CSV (optional)", type=["csv"], key="meta")
-
-can_process = file_bw_x is not None or file_bw_bsky is not None
-if not can_process:
-    st.warning("Upload at least one Brandwatch input file to enable processing.")
-
-if st.button("Process", disabled=not can_process):
-    with st.spinner("Processing…"):
-        try:
-            result = process(file_bw_x, file_bw_bsky, file_dol, file_meta)
-            st.success(f"Done — {len(result):,} rows, {len(result.columns)} columns.")
-            st.dataframe(result.head(20), use_container_width=True)
-            xlsx = to_excel_bytes(result)
-            st.download_button(
-                label="Download enriched Excel file",
-                data=xlsx,
-                file_name="enriched_posts.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-        except Exception as e:
-            st.error(f"Error: {e}")
+if __name__ == "__main__":
+    bw_file = "/Users/ailab/Downloads/X and Bsky Raw BW 0524-053026 copy.csv"
+    dol_file = "/Users/ailab/Downloads/Stuff for Claude/DOL-KOL Lookup Sheet 052726.csv"
+    meta_file = "/Users/ailab/Downloads/X Bsky Authors 0524-0530.xlsx - Project Contacts.csv"
+    
+    try:
+        result = process(bw_file, dol_file, meta_file)
+        print(f"✓ Success! {len(result):,} rows, {len(result.columns)} columns")
+        print("\nFirst 5 rows:")
+        print(result.head())
+        print("\nColumns:")
+        print(result.columns.tolist())
+        
+        # Save to Excel
+        output_file = "/Users/ailab/Downloads/enriched_posts_test.xlsx"
+        with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
+            result.to_excel(writer, index=False, sheet_name="Enriched")
+        print(f"\n✓ Saved to {output_file}")
+    except Exception as e:
+        print(f"✗ Error: {e}")
+        import traceback
+        traceback.print_exc()
