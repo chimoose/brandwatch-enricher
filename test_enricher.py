@@ -49,7 +49,27 @@ INPUT_NOT_AVAILABLE = "input not available"
 OUTPUT_COLUMNS = [
     "Date", "Url", "Domain", "Author", "Likes", "Comments", "Shares", "Full Text",
     "Mentioned Authors", "Thread Author", "Thread Entry Type", "X Author ID", "X Followers",
-    "Engagement Score", "Bluesky Author Id", "Name", "Institution", "NPI", "DOL Yes/No",
+    "Engagement Score", "Bluesky Author Id", "Category Details",
+    "All GLP1 by Category - Drug Class - Dual Agonist",
+    "All GLP1 by Category - Drug Class - Oral Tx",
+    "All GLP1 by Category - Drug Class - Single Agonist",
+    "All GLP1 by Category - Drug Class - Triple Agonist",
+    "All GLP1 by Category - Product - Aleniglipron",
+    "All GLP1 by Category - Product - Dulaglutide",
+    "All GLP1 by Category - Product - Elecoglipron",
+    "All GLP1 by Category - Product - Exenatide",
+    "All GLP1 by Category - Product - Injectable Semaglutide",
+    "All GLP1 by Category - Product - Liraglutide",
+    "All GLP1 by Category - Product - Lixisenatide",
+    "All GLP1 by Category - Product - Oral Semaglutide",
+    "All GLP1 by Category - Product - Orforglipron",
+    "All GLP1 by Category - Product - Pemvidutide",
+    "All GLP1 by Category - Product - Retatrudide",
+    "All GLP1 by Category - Product - Survodutide",
+    "All GLP1 by Category - Product - Tirzepatide",
+    "All GLP1 by Category - TA - Diabetes",
+    "All GLP1 by Category - TA - Obesity",
+    "Name", "Institution", "NPI", "DOL Yes/No",
     "DOL Profile", "Lilly KOL", "Validated US?", "Continent", "Country", "State",
     "City", "Specialty 1", "Specialty 2",
 ]
@@ -58,6 +78,26 @@ BW_KEEP_COLUMNS = [
     "Date", "Url", "Domain", "Author", "Likes", "Comments", "Shares", "Full Text",
     "Mentioned Authors", "Thread Author", "Thread Entry Type", "X Author ID", "X Followers",
     "Engagement Score", "Bluesky Author Id",
+    "All GLP1 by Category - Drug Class - Dual Agonist",
+    "All GLP1 by Category - Drug Class - Oral Tx",
+    "All GLP1 by Category - Drug Class - Single Agonist",
+    "All GLP1 by Category - Drug Class - Triple Agonist",
+    "All GLP1 by Category - Product - Aleniglipron",
+    "All GLP1 by Category - Product - Dulaglutide",
+    "All GLP1 by Category - Product - Elecoglipron",
+    "All GLP1 by Category - Product - Exenatide",
+    "All GLP1 by Category - Product - Injectable Semaglutide",
+    "All GLP1 by Category - Product - Liraglutide",
+    "All GLP1 by Category - Product - Lixisenatide",
+    "All GLP1 by Category - Product - Oral Semaglutide",
+    "All GLP1 by Category - Product - Orforglipron",
+    "All GLP1 by Category - Product - Pemvidutide",
+    "All GLP1 by Category - Product - Retatrudide",
+    "All GLP1 by Category - Product - Survodutide",
+    "All GLP1 by Category - Product - Tirzepatide",
+    "All GLP1 by Category - TA - Diabetes",
+    "All GLP1 by Category - TA - Obesity",
+    "Category Details",
 ]
 
 
@@ -177,6 +217,29 @@ def process(file1_path, file2_path=None, file3_path=None, file4_path=None):
                                                     "Continent", "Country", "State", "City",
                                                     "Specialty 1", "Specialty 2"] else ""
     return df[OUTPUT_COLUMNS]
+
+
+def test_category_details_column_is_preserved(tmp_path):
+    bw_file = tmp_path / "bw.csv"
+    # Create a CSV containing all expected Brandwatch input columns
+    header = ",".join(BW_KEEP_COLUMNS)
+    # Create a simple row: date + 'val' for most fields, and 'foo' for Category Details if present
+    values = []
+    for c in BW_KEEP_COLUMNS:
+        if c == 'Date':
+            values.append('2026-07-17')
+        elif c == 'Category Details':
+            values.append('foo')
+        elif c.startswith('All GLP1 by Category'):
+            values.append('1')
+        else:
+            values.append('val')
+    bw_file.write_text(header + "\n" + ",".join(values) + "\n", encoding="utf-8")
+
+    result = process(str(bw_file), None, None, None)
+
+    assert "Category Details" in result.columns
+    assert result.iloc[0].get("Category Details") == "foo"
 
 
 if __name__ == "__main__":

@@ -5,7 +5,29 @@ import streamlit as st
 OUTPUT_COLUMNS = [
     "Date", "Url", "Domain", "Author", "Likes", "Comments", "Shares", "Full Text",
     "Mentioned Authors", "Thread Author", "Thread Entry Type", "X Author ID", "X Followers",
-    "Engagement Score", "Bluesky Author Id", "Name", "Institution", "NPI", "DOL Yes/No",
+    "Engagement Score", "Bluesky Author Id", "Category Details",
+    # Category flags from Brandwatch to retain
+    "All GLP1 by Category - Drug Class - Dual Agonist",
+    "All GLP1 by Category - Drug Class - Oral Tx",
+    "All GLP1 by Category - Drug Class - Single Agonist",
+    "All GLP1 by Category - Drug Class - Triple Agonist",
+    "All GLP1 by Category - Product - Aleniglipron",
+    "All GLP1 by Category - Product - Dulaglutide",
+    "All GLP1 by Category - Product - Elecoglipron",
+    "All GLP1 by Category - Product - Exenatide",
+    "All GLP1 by Category - Product - Injectable Semaglutide",
+    "All GLP1 by Category - Product - Liraglutide",
+    "All GLP1 by Category - Product - Lixisenatide",
+    "All GLP1 by Category - Product - Oral Semaglutide",
+    "All GLP1 by Category - Product - Orforglipron",
+    "All GLP1 by Category - Product - Pemvidutide",
+    "All GLP1 by Category - Product - Retatrudide",
+    "All GLP1 by Category - Product - Survodutide",
+    "All GLP1 by Category - Product - Tirzepatide",
+    "All GLP1 by Category - TA - Diabetes",
+    "All GLP1 by Category - TA - Obesity",
+    # Enrichment / lookup columns
+    "Name", "Institution", "NPI", "DOL Yes/No",
     "DOL Profile", "Lilly KOL", "Validated US?", "Continent", "Country", "State",
     "City", "Specialty 1", "Specialty 2",
 ]
@@ -17,6 +39,28 @@ BW_KEEP_COLUMNS = [
     "Date", "Url", "Domain", "Author", "Likes", "Comments", "Shares", "Full Text",
     "Mentioned Authors", "Thread Author", "Thread Entry Type", "X Author ID", "X Followers",
     "Engagement Score", "Bluesky Author Id",
+    # Keep Brandwatch category indicator columns so they survive enrichment
+    "All GLP1 by Category - Drug Class - Dual Agonist",
+    "All GLP1 by Category - Drug Class - Oral Tx",
+    "All GLP1 by Category - Drug Class - Single Agonist",
+    "All GLP1 by Category - Drug Class - Triple Agonist",
+    "All GLP1 by Category - Product - Aleniglipron",
+    "All GLP1 by Category - Product - Dulaglutide",
+    "All GLP1 by Category - Product - Elecoglipron",
+    "All GLP1 by Category - Product - Exenatide",
+    "All GLP1 by Category - Product - Injectable Semaglutide",
+    "All GLP1 by Category - Product - Liraglutide",
+    "All GLP1 by Category - Product - Lixisenatide",
+    "All GLP1 by Category - Product - Oral Semaglutide",
+    "All GLP1 by Category - Product - Orforglipron",
+    "All GLP1 by Category - Product - Pemvidutide",
+    "All GLP1 by Category - Product - Retatrudide",
+    "All GLP1 by Category - Product - Survodutide",
+    "All GLP1 by Category - Product - Tirzepatide",
+    "All GLP1 by Category - TA - Diabetes",
+    "All GLP1 by Category - TA - Obesity",
+    # Also preserve the free-form Category Details column if present
+    "Category Details",
 ]
 
 
@@ -229,12 +273,24 @@ if st.button("Process", disabled=not can_process):
             result = process(file_bw_x, file_bw_bsky, file_dol, file_meta)
             st.success(f"Done — {len(result):,} rows, {len(result.columns)} columns.")
             st.dataframe(result.head(20), use_container_width=True)
+
+            csv_bytes = result.to_csv(index=False).encode("utf-8")
             xlsx = to_excel_bytes(result)
-            st.download_button(
-                label="Download enriched Excel file",
-                data=xlsx,
-                file_name="enriched_posts.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
+
+            col_download1, col_download2 = st.columns(2)
+            with col_download1:
+                st.download_button(
+                    label="Download enriched CSV",
+                    data=csv_bytes,
+                    file_name="enriched_posts.csv",
+                    mime="text/csv",
+                )
+            with col_download2:
+                st.download_button(
+                    label="Download enriched Excel file",
+                    data=xlsx,
+                    file_name="enriched_posts.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
         except Exception as e:
             st.error(f"Error: {e}")
