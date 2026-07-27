@@ -290,6 +290,42 @@ def test_as_bool_array_accepts_series_mask():
     assert _as_bool_array(mask).tolist() == [True, False]
 
 
+def test_process_handles_duplicate_bluesky_metadata_handles(tmp_path):
+    bw_file = tmp_path / "bw.csv"
+    header = ",".join(BW_KEEP_COLUMNS)
+    values = []
+    for c in BW_KEEP_COLUMNS:
+        if c == "Date":
+            values.append("2026-07-17")
+        elif c == "Domain":
+            values.append("bsky.app")
+        elif c == "Author":
+            values.append("handle1.bsky.social")
+        elif c == "Full Text":
+            values.append("hello world")
+        elif c == "Category Details":
+            values.append("foo")
+        elif c.startswith("All GLP1 by Category"):
+            values.append("1")
+        else:
+            values.append("val")
+    bw_file.write_text(header + "\n" + ",".join(values) + "\n", encoding="utf-8")
+
+    meta_file = tmp_path / "meta.csv"
+    meta_file.write_text(
+        "Twitter Handle,Bluesky Handle,First Name,Last Name,Institution,Country,State,City,Medical Specialty 1,Medical Specialty 2\n"
+        "handle1,handle1.bsky.social,Jane,Smith,Example Health,United States,CA,Los Angeles,Cardiology,Oncology\n"
+        "handle1,handle1.bsky.social,Jane,Smith,Example Health,United States,CA,Los Angeles,Cardiology,Oncology\n",
+        encoding="utf-8",
+    )
+
+    result = process(str(bw_file), None, None, str(meta_file))
+
+    assert result.iloc[0]["Name"] == "Jane Smith"
+    assert result.iloc[0]["Institution"] == "Example Health"
+    assert result.iloc[0]["Country"] == "United States"
+
+
 if __name__ == "__main__":
     bw_file = "/Users/ailab/Downloads/X and Bsky Raw BW 0524-053026 copy.csv"
     dol_file = "/Users/ailab/Downloads/Stuff for Claude/DOL-KOL Lookup Sheet 052726.csv"

@@ -1,4 +1,5 @@
 import io
+import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -114,6 +115,47 @@ def _as_bool_array(mask):
     return mask
 
 
+def _resolve_lookup_row(lookup, handle):
+    """Return a scalar-valued dict for a lookup key, even when the index has duplicates."""
+    if not handle:
+        return None
+    if handle not in lookup.index:
+        return None
+
+    row = lookup.loc[handle]
+    if isinstance(row, pd.DataFrame):
+        if row.empty:
+            return None
+        row = row.iloc[0]
+    elif not isinstance(row, pd.Series):
+        return None
+
+    resolved = {}
+    for key, value in row.to_dict().items():
+        if isinstance(value, (pd.Series, pd.DataFrame)):
+            if isinstance(value, pd.DataFrame):
+                if value.empty:
+                    resolved[key] = ""
+                else:
+                    resolved[key] = value.iloc[0, 0]
+            else:
+                resolved[key] = value.iloc[0] if len(value) else ""
+        else:
+            resolved[key] = value
+    return resolved
+
+
+def _coerce_lookup_value(df, column, value):
+    """Coerce missing values to empty strings for object columns and NaN for numeric columns."""
+    if value is None:
+        return "" if not pd.api.types.is_numeric_dtype(df[column].dtype) else np.nan
+    if isinstance(value, str) and value == "":
+        return "" if not pd.api.types.is_numeric_dtype(df[column].dtype) else np.nan
+    if isinstance(value, float) and pd.isna(value):
+        return "" if not pd.api.types.is_numeric_dtype(df[column].dtype) else np.nan
+    return value
+
+
 def read_brandwatch_csv(file, file_label):
     if file is None:
         return None
@@ -216,12 +258,12 @@ def process(bw_x_file=None, bw_bsky_file=None, lookup_file=None, meta_file=None)
                                                                "Specialty 1", "Specialty 2"] ]
             df_bsky_handles = df.loc[mask, "_handle"].fillna("")
             looked = df_bsky_handles.astype(str).str.lower().str.strip().map(
-                lambda h: bsky_lookup.loc[h].to_dict() if h and h in bsky_lookup.index else None
+                lambda h: _resolve_lookup_row(bsky_lookup, h)
             )
             for idx, val in looked.items():
                 if val:
                     for k, v in val.items():
-                        df.at[idx, k] = v
+                        df.at[idx, k] = _coerce_lookup_value(df, k, v)
 
         df["Validated US?"] = df["Validated US?"].fillna("No")
         is_bluesky = df["_domain"].fillna("").str.lower() == "bsky.app"
