@@ -87,24 +87,23 @@ def find_header_row(file) -> int:
     import csv, io as _io
     raw = file.read().decode("utf-8", errors="replace")
     file.seek(0)
+    cleaned = raw.replace("\x00", "")
 
-    for i, row in enumerate(csv.reader(_io.StringIO(raw))):
-        lowered = [c.strip() for c in row if isinstance(c, str)]
-        lowered = [c.replace("\ufeff", "") for c in lowered]
+    for i, row in enumerate(csv.reader(_io.StringIO(cleaned))):
+        lowered = [c.strip().lower().replace("\ufeff", "") for c in row if isinstance(c, str)]
+        if not lowered:
+            continue
 
-        # The real Brandwatch header row usually contains Date and Author,
-        # plus one of the content columns that carries the post body.
-        has_date_author = "Date" in lowered and "Author" in lowered
-        has_content_column = any(
-            col in lowered
-            for col in ["Snippet", "Full Text", "Text", "Content", "Url", "Title"]
-        )
-        if has_date_author and has_content_column:
+        has_date = any(col in lowered for col in ["date", "created", "created date", "timestamp", "posted"])
+        has_content = any(col in lowered for col in ["snippet", "full text", "text", "content", "body", "title", "url", "message", "post"])
+        has_author = any(col in lowered for col in ["author", "username", "user name", "screen name", "account", "handle"])
+
+        if has_date and has_content and (has_author or len(row) >= 4):
             return i
 
     raise ValueError(
         "Could not find the header row in File 1. "
-        "Expected a row containing 'Date' and 'Author' (and a content column such as 'Snippet', 'Full Text', 'Text', or 'Url')."
+        "Expected a row containing a date field and a content column such as 'Snippet', 'Full Text', 'Text', 'Title', or 'Url'."
     )
 
 

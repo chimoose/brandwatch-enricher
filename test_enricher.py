@@ -32,19 +32,19 @@ def find_header_row(file) -> int:
     """Return the 0-based row index that contains the Brandwatch column headers."""
     raw = file.read().decode("utf-8", errors="replace")
     file.seek(0)
-    for i, row in enumerate(csv.reader(_io.StringIO(raw))):
-        lowered = [c.strip() for c in row if isinstance(c, str)]
-        lowered = [c.replace("\ufeff", "") for c in lowered]
-        has_date_author = "Date" in lowered and "Author" in lowered
-        has_content_column = any(
-            col in lowered
-            for col in ["Snippet", "Full Text", "Text", "Content", "Url", "Title"]
-        )
-        if has_date_author and has_content_column:
+    cleaned = raw.replace("\x00", "")
+    for i, row in enumerate(csv.reader(_io.StringIO(cleaned))):
+        lowered = [c.strip().lower().replace("\ufeff", "") for c in row if isinstance(c, str)]
+        if not lowered:
+            continue
+        has_date = any(col in lowered for col in ["date", "created", "created date", "timestamp", "posted"])
+        has_content = any(col in lowered for col in ["snippet", "full text", "text", "content", "body", "title", "url", "message", "post"])
+        has_author = any(col in lowered for col in ["author", "username", "user name", "screen name", "account", "handle"])
+        if has_date and has_content and (has_author or len(row) >= 4):
             return i
     raise ValueError(
         "Could not find the header row in File 1. "
-        "Expected a row containing 'Date' and 'Author' (and a content column such as 'Snippet', 'Full Text', 'Text', or 'Url')."
+        "Expected a row containing a date field and a content column such as 'Snippet', 'Full Text', 'Text', 'Title', or 'Url'."
     )
 
 
@@ -263,6 +263,18 @@ def test_find_header_row_skips_metadata_block(tmp_path):
 
     with open(bw_file, "rb") as fh:
         assert find_header_row(fh) == 6
+
+
+def test_find_header_row_accepts_headers_without_author(tmp_path):
+    bw_file = tmp_path / "bw_without_author.csv"
+    bw_file.write_text(
+        "Date,Title,Snippet,Url\n"
+        "2026-07-17,Example title,Hello world,https://example.com\n",
+        encoding="utf-8",
+    )
+
+    with open(bw_file, "rb") as fh:
+        assert find_header_row(fh) == 0
 
 
 if __name__ == "__main__":
