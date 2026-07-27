@@ -105,6 +105,12 @@ BW_KEEP_COLUMNS = [
 ]
 
 
+def _as_bool_array(mask):
+    if hasattr(mask, "to_numpy"):
+        return mask.to_numpy()
+    return mask
+
+
 def read_brandwatch_csv(file_path, file_label):
     if file_path is None:
         return None
@@ -183,16 +189,18 @@ def process(file1_path, file2_path=None, file3_path=None, file4_path=None):
             how="left",
         )
 
+        df = df.reset_index(drop=True)
         is_bluesky = df["_domain"].fillna("").str.lower() == "bsky.app"
         missing_name = df["Name"].isna() | (df["Name"] == "")
         need_bluesky_lookup = is_bluesky & missing_name
         if need_bluesky_lookup.any():
+            mask = _as_bool_array(need_bluesky_lookup)
             bsky_lookup = meta.set_index("_bluesky_handle")[ ["Name", "Institution", "NPI", "Validated US?",
                                                                "Continent", "Country", "State", "City",
                                                                "Specialty 1", "Specialty 2"] ]
-            df_bsky_handles = df.loc[need_bluesky_lookup, "_handle"].fillna("")
-            looked = df_bsky_handles.str.lower().str.strip().map(
-                lambda h: bsky_lookup.loc[h].to_dict() if h in bsky_lookup.index else None
+            df_bsky_handles = df.loc[mask, "_handle"].fillna("")
+            looked = df_bsky_handles.astype(str).str.lower().str.strip().map(
+                lambda h: bsky_lookup.loc[h].to_dict() if h and h in bsky_lookup.index else None
             )
             for idx, val in looked.items():
                 if val:
@@ -202,7 +210,7 @@ def process(file1_path, file2_path=None, file3_path=None, file4_path=None):
         is_bluesky = df["_domain"].fillna("").str.lower() == "bsky.app"
         has_name = df["Name"].notna() & (df["Name"] != "")
         unmatched_bluesky = is_bluesky & ~has_name
-        df = df[~unmatched_bluesky].copy()
+        df = df.loc[~_as_bool_array(unmatched_bluesky)].copy()
     else:
         df["Name"] = INPUT_NOT_AVAILABLE
         df["Institution"] = INPUT_NOT_AVAILABLE
@@ -275,6 +283,11 @@ def test_find_header_row_accepts_headers_without_author(tmp_path):
 
     with open(bw_file, "rb") as fh:
         assert find_header_row(fh) == 0
+
+
+def test_as_bool_array_accepts_series_mask():
+    mask = pd.Series([True, False], index=[10, 11])
+    assert _as_bool_array(mask).tolist() == [True, False]
 
 
 if __name__ == "__main__":

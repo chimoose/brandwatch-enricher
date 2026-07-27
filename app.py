@@ -107,6 +107,13 @@ def find_header_row(file) -> int:
     )
 
 
+def _as_bool_array(mask):
+    """Return a NumPy bool array from a pandas Series/array-like mask."""
+    if hasattr(mask, "to_numpy"):
+        return mask.to_numpy()
+    return mask
+
+
 def read_brandwatch_csv(file, file_label):
     if file is None:
         return None
@@ -198,16 +205,18 @@ def process(bw_x_file=None, bw_bsky_file=None, lookup_file=None, meta_file=None)
             how="left",
         )
 
+        df = df.reset_index(drop=True)
         is_bluesky = df["_domain"].fillna("").str.lower() == "bsky.app"
         missing_name = df["Name"].isna() | (df["Name"] == "")
         need_bluesky_lookup = is_bluesky & missing_name
         if need_bluesky_lookup.any():
+            mask = _as_bool_array(need_bluesky_lookup)
             bsky_lookup = meta.set_index("_bluesky_handle")[ ["Name", "Institution", "NPI", "Validated US?",
                                                                "Continent", "Country", "State", "City",
                                                                "Specialty 1", "Specialty 2"] ]
-            df_bsky_handles = df.loc[need_bluesky_lookup, "_handle"].fillna("")
-            looked = df_bsky_handles.str.lower().str.strip().map(
-                lambda h: bsky_lookup.loc[h].to_dict() if h in bsky_lookup.index else None
+            df_bsky_handles = df.loc[mask, "_handle"].fillna("")
+            looked = df_bsky_handles.astype(str).str.lower().str.strip().map(
+                lambda h: bsky_lookup.loc[h].to_dict() if h and h in bsky_lookup.index else None
             )
             for idx, val in looked.items():
                 if val:
@@ -218,7 +227,7 @@ def process(bw_x_file=None, bw_bsky_file=None, lookup_file=None, meta_file=None)
         is_bluesky = df["_domain"].fillna("").str.lower() == "bsky.app"
         has_name = df["Name"].notna() & (df["Name"] != "")
         unmatched_bluesky = is_bluesky & ~has_name
-        df = df[~unmatched_bluesky].copy()
+        df = df.loc[~_as_bool_array(unmatched_bluesky)].copy()
     else:
         df["Name"] = INPUT_NOT_AVAILABLE
         df["Institution"] = INPUT_NOT_AVAILABLE
