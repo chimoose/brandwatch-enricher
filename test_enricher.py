@@ -33,14 +33,18 @@ def find_header_row(file) -> int:
     raw = file.read().decode("utf-8", errors="replace")
     file.seek(0)
     for i, row in enumerate(csv.reader(_io.StringIO(raw))):
-        lowered = [c.strip() for c in row]
-        if "Date" in lowered and "Author" in lowered and (
-            "Snippet" in lowered or "Full Text" in lowered or "Url" in lowered
-        ):
+        lowered = [c.strip() for c in row if isinstance(c, str)]
+        lowered = [c.replace("\ufeff", "") for c in lowered]
+        has_date_author = "Date" in lowered and "Author" in lowered
+        has_content_column = any(
+            col in lowered
+            for col in ["Snippet", "Full Text", "Text", "Content", "Url", "Title"]
+        )
+        if has_date_author and has_content_column:
             return i
     raise ValueError(
         "Could not find the header row in File 1. "
-        "Expected a row containing 'Date' and 'Author' (and 'Snippet' or 'Full Text' or 'Url')."
+        "Expected a row containing 'Date' and 'Author' (and a content column such as 'Snippet', 'Full Text', 'Text', or 'Url')."
     )
 
 
@@ -109,6 +113,7 @@ def read_brandwatch_csv(file_path, file_label):
     df = pd.read_csv(
         file_path,
         skiprows=header_row,
+        skip_blank_lines=True,
         dtype={"Date": str, "X Author ID": str, "Bluesky Author Id": str},
         low_memory=False,
     )
@@ -240,6 +245,24 @@ def test_category_details_column_is_preserved(tmp_path):
 
     assert "Category Details" in result.columns
     assert result.iloc[0].get("Category Details") == "foo"
+
+
+def test_find_header_row_skips_metadata_block(tmp_path):
+    bw_file = tmp_path / "bw_with_metadata.csv"
+    bw_file.write_text(
+        "Report:\n"
+        "Bulk Mentions Download\n"
+        "Brand:\n"
+        "Example Brand\n"
+        "Label:\n"
+        "\n"
+        "Date,Author,Text,Url\n"
+        "2026-07-17,alice,Hello world,https://example.com\n",
+        encoding="utf-8",
+    )
+
+    with open(bw_file, "rb") as fh:
+        assert find_header_row(fh) == 6
 
 
 if __name__ == "__main__":

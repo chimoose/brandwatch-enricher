@@ -87,17 +87,24 @@ def find_header_row(file) -> int:
     import csv, io as _io
     raw = file.read().decode("utf-8", errors="replace")
     file.seek(0)
+
     for i, row in enumerate(csv.reader(_io.StringIO(raw))):
-        # Header row should contain Date and Author, and at least one of
-        # Snippet/Full Text/Url to be flexible with formats.
-        lowered = [c.strip() for c in row]
-        if "Date" in lowered and "Author" in lowered and (
-            "Snippet" in lowered or "Full Text" in lowered or "Url" in lowered
-        ):
+        lowered = [c.strip() for c in row if isinstance(c, str)]
+        lowered = [c.replace("\ufeff", "") for c in lowered]
+
+        # The real Brandwatch header row usually contains Date and Author,
+        # plus one of the content columns that carries the post body.
+        has_date_author = "Date" in lowered and "Author" in lowered
+        has_content_column = any(
+            col in lowered
+            for col in ["Snippet", "Full Text", "Text", "Content", "Url", "Title"]
+        )
+        if has_date_author and has_content_column:
             return i
+
     raise ValueError(
         "Could not find the header row in File 1. "
-        "Expected a row containing 'Date' and 'Author' (and 'Snippet' or 'Full Text' or 'Url')."
+        "Expected a row containing 'Date' and 'Author' (and a content column such as 'Snippet', 'Full Text', 'Text', or 'Url')."
     )
 
 
@@ -108,6 +115,7 @@ def read_brandwatch_csv(file, file_label):
     df = pd.read_csv(
         file,
         skiprows=header_row,
+        skip_blank_lines=True,
         dtype={"Date": str, "X Author ID": str, "Bluesky Author Id": str},
         low_memory=False,
     )
