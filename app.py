@@ -3,11 +3,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-OUTPUT_COLUMNS = [
-    "Date", "Url", "Domain", "Author", "Likes", "Comments", "Shares", "Full Text",
-    "Mentioned Authors", "Thread Author", "Thread Entry Type", "X Author ID", "X Followers",
-    "Engagement Score", "Bluesky Author Id", "Category Details",
-    # Category flags from Brandwatch to retain
+CATEGORY_COLUMNS = [
     "All GLP1 by Category - Drug Class - Dual Agonist",
     "All GLP1 by Category - Drug Class - Oral Tx",
     "All GLP1 by Category - Drug Class - Single Agonist",
@@ -27,6 +23,13 @@ OUTPUT_COLUMNS = [
     "All GLP1 by Category - Product - Tirzepatide",
     "All GLP1 by Category - TA - Diabetes",
     "All GLP1 by Category - TA - Obesity",
+]
+
+OUTPUT_COLUMNS = [
+    "Date", "Url", "Domain", "Author", "Likes", "Comments", "Shares", "Full Text",
+    "Mentioned Authors", "Thread Author", "Thread Entry Type", "X Author ID", "X Followers",
+    "Engagement Score", "Bluesky Author Id", "Category Details",
+    *CATEGORY_COLUMNS,
     # Enrichment / lookup columns
     "Name", "Institution", "NPI", "DOL Yes/No",
     "DOL Profile", "Lilly KOL", "Validated US?", "Continent", "Country", "State",
@@ -35,34 +38,13 @@ OUTPUT_COLUMNS = [
 
 INPUT_NOT_AVAILABLE = "input not available"
 
-# Columns to keep from the incoming Brandwatch CSV
-BW_KEEP_COLUMNS = [
+# Columns required from the incoming Brandwatch CSV. Category fields are optional.
+BASE_BW_KEEP_COLUMNS = [
     "Date", "Url", "Domain", "Author", "Likes", "Comments", "Shares", "Full Text",
     "Mentioned Authors", "Thread Author", "Thread Entry Type", "X Author ID", "X Followers",
     "Engagement Score", "Bluesky Author Id",
-    # Keep Brandwatch category indicator columns so they survive enrichment
-    "All GLP1 by Category - Drug Class - Dual Agonist",
-    "All GLP1 by Category - Drug Class - Oral Tx",
-    "All GLP1 by Category - Drug Class - Single Agonist",
-    "All GLP1 by Category - Drug Class - Triple Agonist",
-    "All GLP1 by Category - Product - Aleniglipron",
-    "All GLP1 by Category - Product - Dulaglutide",
-    "All GLP1 by Category - Product - Elecoglipron",
-    "All GLP1 by Category - Product - Exenatide",
-    "All GLP1 by Category - Product - Injectable Semaglutide",
-    "All GLP1 by Category - Product - Liraglutide",
-    "All GLP1 by Category - Product - Lixisenatide",
-    "All GLP1 by Category - Product - Oral Semaglutide",
-    "All GLP1 by Category - Product - Orforglipron",
-    "All GLP1 by Category - Product - Pemvidutide",
-    "All GLP1 by Category - Product - Retatrudide",
-    "All GLP1 by Category - Product - Survodutide",
-    "All GLP1 by Category - Product - Tirzepatide",
-    "All GLP1 by Category - TA - Diabetes",
-    "All GLP1 by Category - TA - Obesity",
-    # Also preserve the free-form Category Details column if present
-    "Category Details",
 ]
+BW_KEEP_COLUMNS = BASE_BW_KEEP_COLUMNS + CATEGORY_COLUMNS + ["Category Details"]
 
 
 def clean(val) -> str:
@@ -159,6 +141,8 @@ def _coerce_lookup_value(df, column, value):
 def read_brandwatch_csv(file, file_label):
     if file is None:
         return None
+    if hasattr(file, "seek"):
+        file.seek(0)
     header_row = find_header_row(file)
     df = pd.read_csv(
         file,
@@ -171,25 +155,68 @@ def read_brandwatch_csv(file, file_label):
     if "Full Text" not in df.columns and "Snippet" in df.columns:
         df = df.rename(columns={"Snippet": "Full Text"})
 
-    missing = [c for c in BW_KEEP_COLUMNS if c not in df.columns]
+    missing = [c for c in BASE_BW_KEEP_COLUMNS if c not in df.columns]
     if missing:
         raise ValueError(f"{file_label} is missing expected columns: {missing}")
-    return df[BW_KEEP_COLUMNS].copy()
+    selected = [c for c in BW_KEEP_COLUMNS if c in df.columns]
+    return df[selected].copy()
 
 
-def process(bw_x_file=None, bw_bsky_file=None, lookup_file=None, meta_file=None):
-    # --- Brandwatch source files ---
-    x_df = read_brandwatch_csv(bw_x_file, "Brandwatch X CSV")
-    bsky_df = read_brandwatch_csv(bw_bsky_file, "Brandwatch Bluesky CSV")
-    if x_df is None and bsky_df is None:
+def _looks_like_brandwatch_csv(file_obj):
+    if file_obj is None:
+        return False
+    try:
+        if hasattr(file_obj, "seek"):
+            file_obj.seek(0)
+        df = read_brandwatch_csv(file_obj, "Brandwatch CSV")
+        return df is not None and not df.empty
+    except Exception:
+        return False
+
+
+def process(*args, **kwargs):
+    bw_file = kwargs.get("bw_file")
+    bw_bsky_file = kwargs.get("bw_bsky_file")
+    lookup_file = kwargs.get("lookup_file")
+    meta_file = kwargs.get("meta_file")
+
+    if args:
+        if len(args) == 1:
+            bw_file = args[0]
+        elif len(args) == 2:
+            if _looks_like_brandwatch_csv(args[1]):
+                bw_bsky_file = args[1]
+            else:
+                lookup_file = args[1]
+        elif len(args) == 3:
+            bw_file = args[0]
+            if _looks_like_brandwatch_csv(args[1]):
+                bw_bsky_file = args[1]
+                lookup_file = args[2]
+            else:
+                lookup_file = args[1]
+                meta_file = args[2]
+        elif len(args) >= 4:
+            bw_file = args[0]
+            bw_bsky_file = args[1]
+            lookup_file = args[2]
+            meta_file = args[3]
+
+    if bw_file is None and bw_bsky_file is not None and _looks_like_brandwatch_csv(bw_bsky_file):
+        bw_file = bw_bsky_file
+        bw_bsky_file = None
+
+    brandwatch_files = []
+    if bw_file is not None:
+        brandwatch_files.append(bw_file)
+    if bw_bsky_file is not None and _looks_like_brandwatch_csv(bw_bsky_file):
+        brandwatch_files.append(bw_bsky_file)
+
+    if not brandwatch_files:
         raise ValueError("At least one Brandwatch input file is required.")
 
-    if x_df is None:
-        df = bsky_df.copy()
-    elif bsky_df is None:
-        df = x_df.copy()
-    else:
-        df = pd.concat([x_df, bsky_df], ignore_index=True)
+    frames = [read_brandwatch_csv(f, "Brandwatch CSV") for f in brandwatch_files]
+    df = pd.concat(frames, ignore_index=True)
 
     # normalize author handle for lookups
     df["_handle"] = df["Author"].astype(str).str.lower().str.strip()
@@ -198,10 +225,11 @@ def process(bw_x_file=None, bw_bsky_file=None, lookup_file=None, meta_file=None)
     # --- DOL/KOL lookup ---
     if lookup_file is not None:
         dol = pd.read_csv(lookup_file, low_memory=False)
+        dol.columns = [str(col).strip() for col in dol.columns]
         if "Twitter Handle" not in dol.columns:
             raise ValueError("DOL/KOL lookup file must contain a 'Twitter Handle' column.")
         dol["_handle"] = dol["Twitter Handle"].astype(str).str.lower().str.strip()
-        dol = dol.rename(columns={"KOL": "Lilly KOL", "DOL": "DOL Yes/No"})
+        dol = dol.rename(columns={"KOL": "Lilly KOL", "DOL": "DOL Yes/No", "DOL Profile": "DOL Profile"})
         dol = dol[["_handle", "DOL Yes/No", "DOL Profile", "Lilly KOL"]].drop_duplicates("_handle")
 
         df = df.merge(dol, on="_handle", how="left")
@@ -216,6 +244,7 @@ def process(bw_x_file=None, bw_bsky_file=None, lookup_file=None, meta_file=None)
     # --- Physician metadata ---
     if meta_file is not None:
         meta = pd.read_csv(meta_file, low_memory=False)
+        meta.columns = [str(col).strip() for col in meta.columns]
         meta_cols = list(meta.columns)
         if "Twitter Handle" in meta_cols:
             meta["_twitter_handle"] = meta["Twitter Handle"].astype(str).str.lower().str.strip()
@@ -283,14 +312,30 @@ def process(bw_x_file=None, bw_bsky_file=None, lookup_file=None, meta_file=None)
         df["Specialty 2"] = INPUT_NOT_AVAILABLE
 
     # --- Final output ---
-    for col in OUTPUT_COLUMNS:
-        if col not in df.columns:
-            df[col] = INPUT_NOT_AVAILABLE if col in ["DOL Yes/No", "DOL Profile", "Lilly KOL",
-                                                    "Name", "Institution", "NPI", "Validated US?",
-                                                    "Continent", "Country", "State", "City",
-                                                    "Specialty 1", "Specialty 2"] else ""
+    category_present = any(col in df.columns for col in CATEGORY_COLUMNS) or "Category Details" in df.columns
+    ordered_columns = [
+        col for col in OUTPUT_COLUMNS
+        if col in df.columns or (
+            col == "Category Details" and category_present
+        ) or (
+            col in CATEGORY_COLUMNS and category_present
+        ) or (
+            col not in CATEGORY_COLUMNS and col != "Category Details"
+        )
+    ]
 
-    return df[OUTPUT_COLUMNS]
+    for col in ordered_columns:
+        if col in df.columns:
+            continue
+        if col in ["DOL Yes/No", "DOL Profile", "Lilly KOL",
+                   "Name", "Institution", "NPI", "Validated US?",
+                   "Continent", "Country", "State", "City",
+                   "Specialty 1", "Specialty 2"]:
+            df[col] = INPUT_NOT_AVAILABLE
+        else:
+            df[col] = ""
+
+    return df[ordered_columns]
 
 
 def to_excel_bytes(df):
@@ -311,24 +356,22 @@ st.markdown(
     "Missing lookup or metadata data will be marked as 'input not available'."
 )
 
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3 = st.columns(3)
 with col1:
-    file_bw_x = st.file_uploader("Brandwatch X CSV", type=["csv"], key="bw_x")
+    file_bw = st.file_uploader("Brandwatch CSV", type=["csv"], key="bw")
 with col2:
-    file_bw_bsky = st.file_uploader("Brandwatch Bluesky CSV", type=["csv"], key="bw_bsky")
-with col3:
     file_dol = st.file_uploader("DOL/KOL Lookup CSV (optional)", type=["csv"], key="dol")
-with col4:
+with col3:
     file_meta = st.file_uploader("Physician Metadata CSV (optional)", type=["csv"], key="meta")
 
-can_process = file_bw_x is not None or file_bw_bsky is not None
+can_process = file_bw is not None
 if not can_process:
-    st.warning("Upload at least one Brandwatch input file to enable processing.")
+    st.warning("Upload a Brandwatch CSV file to enable processing.")
 
 if st.button("Process", disabled=not can_process):
     with st.spinner("Processing…"):
         try:
-            result = process(file_bw_x, file_bw_bsky, file_dol, file_meta)
+            result = process(file_bw, file_dol, file_meta)
             st.success(f"Done — {len(result):,} rows, {len(result.columns)} columns.")
             st.dataframe(result.head(20), use_container_width=True)
 

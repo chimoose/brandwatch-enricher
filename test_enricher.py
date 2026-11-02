@@ -78,10 +78,7 @@ OUTPUT_COLUMNS = [
     "City", "Specialty 1", "Specialty 2",
 ]
 
-BW_KEEP_COLUMNS = [
-    "Date", "Url", "Domain", "Author", "Likes", "Comments", "Shares", "Full Text",
-    "Mentioned Authors", "Thread Author", "Thread Entry Type", "X Author ID", "X Followers",
-    "Engagement Score", "Bluesky Author Id",
+CATEGORY_COLUMNS = [
     "All GLP1 by Category - Drug Class - Dual Agonist",
     "All GLP1 by Category - Drug Class - Oral Tx",
     "All GLP1 by Category - Drug Class - Single Agonist",
@@ -101,8 +98,14 @@ BW_KEEP_COLUMNS = [
     "All GLP1 by Category - Product - Tirzepatide",
     "All GLP1 by Category - TA - Diabetes",
     "All GLP1 by Category - TA - Obesity",
-    "Category Details",
 ]
+
+BASE_BW_KEEP_COLUMNS = [
+    "Date", "Url", "Domain", "Author", "Likes", "Comments", "Shares", "Full Text",
+    "Mentioned Authors", "Thread Author", "Thread Entry Type", "X Author ID", "X Followers",
+    "Engagement Score", "Bluesky Author Id",
+]
+BW_KEEP_COLUMNS = BASE_BW_KEEP_COLUMNS + CATEGORY_COLUMNS + ["Category Details"]
 
 
 def _as_bool_array(mask):
@@ -114,39 +117,102 @@ def _as_bool_array(mask):
 def read_brandwatch_csv(file_path, file_label):
     if file_path is None:
         return None
-    with open(file_path, "rb") as f:
-        header_row = find_header_row(f)
-    df = pd.read_csv(
-        file_path,
-        skiprows=header_row,
-        skip_blank_lines=True,
-        dtype={"Date": str, "X Author ID": str, "Bluesky Author Id": str},
-        low_memory=False,
-    )
+    if isinstance(file_path, str):
+        with open(file_path, "rb") as f:
+            header_row = find_header_row(f)
+        df = pd.read_csv(
+            file_path,
+            skiprows=header_row,
+            skip_blank_lines=True,
+            dtype={"Date": str, "X Author ID": str, "Bluesky Author Id": str},
+            low_memory=False,
+        )
+    else:
+        if hasattr(file_path, "seek"):
+            file_path.seek(0)
+        header_row = find_header_row(file_path)
+        file_path.seek(0)
+        df = pd.read_csv(
+            file_path,
+            skiprows=header_row,
+            skip_blank_lines=True,
+            dtype={"Date": str, "X Author ID": str, "Bluesky Author Id": str},
+            low_memory=False,
+        )
     if "Full Text" not in df.columns and "Snippet" in df.columns:
         df = df.rename(columns={"Snippet": "Full Text"})
-    missing = [c for c in BW_KEEP_COLUMNS if c not in df.columns]
+    missing = [c for c in BASE_BW_KEEP_COLUMNS if c not in df.columns]
     if missing:
         raise ValueError(f"{file_label} is missing expected columns: {missing}")
-    return df[BW_KEEP_COLUMNS].copy()
+    selected = [c for c in BW_KEEP_COLUMNS if c in df.columns]
+    return df[selected].copy()
 
 
-def process(file1_path, file2_path=None, file3_path=None, file4_path=None):
-    x_df = read_brandwatch_csv(file1_path, "Brandwatch X CSV")
-    bsky_df = read_brandwatch_csv(file2_path, "Brandwatch Bluesky CSV")
-    if x_df is None and bsky_df is None:
+def _looks_like_brandwatch_csv(file_obj):
+    if file_obj is None:
+        return False
+    try:
+        if hasattr(file_obj, "seek"):
+            file_obj.seek(0)
+        df = read_brandwatch_csv(file_obj, "Brandwatch CSV")
+        return df is not None and not df.empty
+    except Exception:
+        return False
+
+
+def process(*args, **kwargs):
+    bw_file = kwargs.get("bw_file")
+    bw_bsky_file = kwargs.get("bw_bsky_file")
+    lookup_file = kwargs.get("lookup_file")
+    meta_file = kwargs.get("meta_file")
+
+    if args:
+        if len(args) == 1:
+            bw_file = args[0]
+        elif len(args) == 2:
+            if _looks_like_brandwatch_csv(args[1]):
+                bw_bsky_file = args[1]
+            else:
+                lookup_file = args[1]
+        elif len(args) == 3:
+            bw_file = args[0]
+            if _looks_like_brandwatch_csv(args[1]):
+                bw_bsky_file = args[1]
+                lookup_file = args[2]
+            else:
+                lookup_file = args[1]
+                meta_file = args[2]
+        elif len(args) >= 4:
+            bw_file = args[0]
+            bw_bsky_file = args[1]
+            lookup_file = args[2]
+            meta_file = args[3]
+
+    if bw_file is None and bw_bsky_file is not None and _looks_like_brandwatch_csv(bw_bsky_file):
+        bw_file = bw_bsky_file
+        bw_bsky_file = None
+
+    brandwatch_files = []
+    if bw_file is not None:
+        brandwatch_files.append(bw_file)
+    if bw_bsky_file is not None and _looks_like_brandwatch_csv(bw_bsky_file):
+        brandwatch_files.append(bw_bsky_file)
+
+    if not brandwatch_files:
         raise ValueError("At least one Brandwatch input file is required.")
-    df = x_df.copy() if bsky_df is None else (bsky_df.copy() if x_df is None else pd.concat([x_df, bsky_df], ignore_index=True))
+
+    df = pd.concat([read_brandwatch_csv(f, "Brandwatch CSV") for f in brandwatch_files], ignore_index=True)
 
     df["_handle"] = df["Author"].astype(str).str.lower().str.strip()
     df["_domain"] = df["Domain"].astype(str).str.lower().str.strip()
 
-    if file3_path is not None:
-        dol = pd.read_csv(file3_path, low_memory=False)
+    if lookup_file is not None:
+        dol = pd.read_csv(lookup_file, low_memory=False)
+        dol.columns = [str(col).strip() for col in dol.columns]
         if "Twitter Handle" not in dol.columns:
             raise ValueError("DOL/KOL lookup file must contain a 'Twitter Handle' column.")
         dol["_handle"] = dol["Twitter Handle"].astype(str).str.lower().str.strip()
-        dol = dol.rename(columns={"KOL": "Lilly KOL", "DOL": "DOL Yes/No"})
+        dol = dol.rename(columns={"KOL": "Lilly KOL", "DOL": "DOL Yes/No", "DOL Profile": "DOL Profile"})
         dol = dol[["_handle", "DOL Yes/No", "DOL Profile", "Lilly KOL"]].drop_duplicates("_handle")
         df = df.merge(dol, on="_handle", how="left")
         df["DOL Yes/No"] = df["DOL Yes/No"].fillna("No")
@@ -157,8 +223,9 @@ def process(file1_path, file2_path=None, file3_path=None, file4_path=None):
         df["DOL Profile"] = INPUT_NOT_AVAILABLE
         df["Lilly KOL"] = INPUT_NOT_AVAILABLE
 
-    if file4_path is not None:
-        meta = pd.read_csv(file4_path, low_memory=False)
+    if meta_file is not None:
+        meta = pd.read_csv(meta_file, low_memory=False)
+        meta.columns = [str(col).strip() for col in meta.columns]
         meta_cols = list(meta.columns)
         if "Twitter Handle" in meta_cols:
             meta["_twitter_handle"] = meta["Twitter Handle"].astype(str).str.lower().str.strip()
@@ -223,13 +290,28 @@ def process(file1_path, file2_path=None, file3_path=None, file4_path=None):
         df["Specialty 1"] = INPUT_NOT_AVAILABLE
         df["Specialty 2"] = INPUT_NOT_AVAILABLE
 
-    for col in OUTPUT_COLUMNS:
-        if col not in df.columns:
-            df[col] = INPUT_NOT_AVAILABLE if col in ["DOL Yes/No", "DOL Profile", "Lilly KOL",
-                                                    "Name", "Institution", "NPI", "Validated US?",
-                                                    "Continent", "Country", "State", "City",
-                                                    "Specialty 1", "Specialty 2"] else ""
-    return df[OUTPUT_COLUMNS]
+    category_present = any(col in df.columns for col in CATEGORY_COLUMNS) or "Category Details" in df.columns
+    ordered_columns = [
+        col for col in OUTPUT_COLUMNS
+        if col in df.columns or (
+            col == "Category Details" and category_present
+        ) or (
+            col in CATEGORY_COLUMNS and category_present
+        ) or (
+            col not in CATEGORY_COLUMNS and col != "Category Details"
+        )
+    ]
+    for col in ordered_columns:
+        if col in df.columns:
+            continue
+        if col in ["DOL Yes/No", "DOL Profile", "Lilly KOL",
+                   "Name", "Institution", "NPI", "Validated US?",
+                   "Continent", "Country", "State", "City",
+                   "Specialty 1", "Specialty 2"]:
+            df[col] = INPUT_NOT_AVAILABLE
+        else:
+            df[col] = ""
+    return df[ordered_columns]
 
 
 def test_category_details_column_is_preserved(tmp_path):
@@ -288,6 +370,87 @@ def test_find_header_row_accepts_headers_without_author(tmp_path):
 def test_as_bool_array_accepts_series_mask():
     mask = pd.Series([True, False], index=[10, 11])
     assert _as_bool_array(mask).tolist() == [True, False]
+
+
+def test_process_accepts_brandwatch_file_without_category_columns(tmp_path):
+    bw_file = tmp_path / "bw_without_categories.csv"
+    base_cols = [c for c in BW_KEEP_COLUMNS if c not in CATEGORY_COLUMNS and c != "Category Details"]
+    row = {
+        "Date": "2026-07-17",
+        "Url": "https://example.com/post",
+        "Domain": "x.com",
+        "Author": "x_handle",
+        "Likes": "10",
+        "Comments": "2",
+        "Shares": "5",
+        "Full Text": "hello world",
+        "Mentioned Authors": "",
+        "Thread Author": "",
+        "Thread Entry Type": "post",
+        "X Author ID": "abc",
+        "X Followers": "123",
+        "Engagement Score": "42",
+        "Bluesky Author Id": "",
+    }
+    csv_text = ",".join(base_cols) + "\n" + ",".join(str(row.get(c, "")) for c in base_cols) + "\n"
+    bw_file.write_text(csv_text, encoding="utf-8")
+
+    result = process(str(bw_file), None, None)
+
+    assert "Category Details" not in result.columns
+    assert all(col not in result.columns for col in CATEGORY_COLUMNS)
+    assert len(result) == 1
+    assert result.iloc[0]["Author"] == "x_handle"
+
+
+def test_process_accepts_single_brandwatch_file_with_lookup_and_metadata(tmp_path):
+    bw_file = tmp_path / "bw.csv"
+    header = ",".join(BW_KEEP_COLUMNS)
+    x_values = []
+    bsky_values = []
+    for c in BW_KEEP_COLUMNS:
+        if c == "Date":
+            x_values.append("2026-07-17")
+            bsky_values.append("2026-07-18")
+        elif c == "Domain":
+            x_values.append("x.com")
+            bsky_values.append("bsky.app")
+        elif c == "Author":
+            x_values.append("x_handle")
+            bsky_values.append("handle1.bsky.social")
+        elif c == "Url":
+            x_values.append("https://x.com/example")
+            bsky_values.append("https://bsky.app/profile/example")
+        elif c == "Full Text":
+            x_values.append("x tweet")
+            bsky_values.append("bsky post")
+        elif c.startswith("All GLP1 by Category"):
+            x_values.append("1")
+            bsky_values.append("0")
+        elif c == "Category Details":
+            x_values.append("x category")
+            bsky_values.append("bsky category")
+        else:
+            x_values.append("val")
+            bsky_values.append("val")
+    bw_file.write_text(header + "\n" + ",".join(x_values) + "\n" + ",".join(bsky_values) + "\n", encoding="utf-8")
+
+    dol_file = tmp_path / "dol.csv"
+    dol_file.write_text("Twitter Handle,DOL, KOL, DOL Profile\n" + "x_handle,Yes,No,https://example.com/dol\n", encoding="utf-8")
+
+    meta_file = tmp_path / "meta.csv"
+    meta_file.write_text(
+        "Twitter Handle,Bluesky Handle,First Name,Last Name,Institution,Country,State,City,Medical Specialty 1,Medical Specialty 2\n"
+        "x_handle,,Jane,Smith,Example Health,United States,CA,Los Angeles,Cardiology,Oncology\n"
+        ",handle1.bsky.social,Jane,Johnson,Example Health,United States,NY,New York,Cardiology,Oncology\n",
+        encoding="utf-8",
+    )
+
+    result = process(str(bw_file), str(dol_file), str(meta_file))
+
+    assert len(result) == 2
+    assert set(result["Domain"]) == {"x.com", "bsky.app"}
+    assert result.iloc[0]["DOL Yes/No"] == "Yes"
 
 
 def test_process_handles_duplicate_bluesky_metadata_handles(tmp_path):
