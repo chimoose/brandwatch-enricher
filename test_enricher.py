@@ -75,7 +75,7 @@ OUTPUT_COLUMNS = [
     "All GLP1 by Category - TA - Obesity",
     "Name", "Institution", "NPI", "DOL Yes/No",
     "DOL Profile", "Lilly KOL", "Validated US?", "Continent", "Country", "State",
-    "City", "Specialty 1", "Specialty 2",
+    "City", "Specialty 1", "Specialty 2", "Classification", "Job Role", "Ecosystem Type",
 ]
 
 CATEGORY_COLUMNS = [
@@ -242,9 +242,11 @@ def process(*args, **kwargs):
         meta = meta.rename(columns={
             "Medical Specialty 1": "Specialty 1",
             "Medical Specialty 2": "Specialty 2",
+            "Ecosystem": "Ecosystem Type",
         })
         meta_select = ["Name", "Institution", "NPI", "Validated US?",
                        "Continent", "Country", "State", "City", "Specialty 1", "Specialty 2",
+                       "Classification", "Job Role", "Ecosystem Type",
                        "_twitter_handle", "_bluesky_handle"]
         for c in meta_select:
             if c not in meta.columns:
@@ -264,7 +266,8 @@ def process(*args, **kwargs):
             mask = _as_bool_array(need_bluesky_lookup)
             bsky_lookup = meta.set_index("_bluesky_handle")[ ["Name", "Institution", "NPI", "Validated US?",
                                                                "Continent", "Country", "State", "City",
-                                                               "Specialty 1", "Specialty 2"] ]
+                                                               "Specialty 1", "Specialty 2", "Classification",
+                                                               "Job Role", "Ecosystem Type"] ]
             df_bsky_handles = df.loc[mask, "_handle"].fillna("")
             looked = df_bsky_handles.astype(str).str.lower().str.strip().map(
                 lambda h: bsky_lookup.loc[h].to_dict() if h and h in bsky_lookup.index else None
@@ -289,6 +292,9 @@ def process(*args, **kwargs):
         df["City"] = INPUT_NOT_AVAILABLE
         df["Specialty 1"] = INPUT_NOT_AVAILABLE
         df["Specialty 2"] = INPUT_NOT_AVAILABLE
+        df["Classification"] = INPUT_NOT_AVAILABLE
+        df["Job Role"] = INPUT_NOT_AVAILABLE
+        df["Ecosystem Type"] = INPUT_NOT_AVAILABLE
 
     category_present = any(col in df.columns for col in CATEGORY_COLUMNS) or "Category Details" in df.columns
     ordered_columns = [
@@ -307,7 +313,8 @@ def process(*args, **kwargs):
         if col in ["DOL Yes/No", "DOL Profile", "Lilly KOL",
                    "Name", "Institution", "NPI", "Validated US?",
                    "Continent", "Country", "State", "City",
-                   "Specialty 1", "Specialty 2"]:
+                   "Specialty 1", "Specialty 2", "Classification",
+                   "Job Role", "Ecosystem Type"]:
             df[col] = INPUT_NOT_AVAILABLE
         else:
             df[col] = ""
@@ -401,6 +408,9 @@ def test_process_accepts_brandwatch_file_without_category_columns(tmp_path):
     assert all(col not in result.columns for col in CATEGORY_COLUMNS)
     assert len(result) == 1
     assert result.iloc[0]["Author"] == "x_handle"
+    assert result.iloc[0]["Classification"] == INPUT_NOT_AVAILABLE
+    assert result.iloc[0]["Job Role"] == INPUT_NOT_AVAILABLE
+    assert result.iloc[0]["Ecosystem Type"] == INPUT_NOT_AVAILABLE
 
 
 def test_process_accepts_single_brandwatch_file_with_lookup_and_metadata(tmp_path):
@@ -440,9 +450,9 @@ def test_process_accepts_single_brandwatch_file_with_lookup_and_metadata(tmp_pat
 
     meta_file = tmp_path / "meta.csv"
     meta_file.write_text(
-        "Twitter Handle,Bluesky Handle,First Name,Last Name,Institution,Country,State,City,Medical Specialty 1,Medical Specialty 2\n"
-        "x_handle,,Jane,Smith,Example Health,United States,CA,Los Angeles,Cardiology,Oncology\n"
-        ",handle1.bsky.social,Jane,Johnson,Example Health,United States,NY,New York,Cardiology,Oncology\n",
+        "Twitter Handle,Bluesky Handle,First Name,Last Name,Institution,Country,State,City,Medical Specialty 1,Medical Specialty 2,Classification,Job Role,Ecosystem\n"
+        "x_handle,,Jane,Smith,Example Health,United States,CA,Los Angeles,Cardiology,Oncology,Clinical,Attending,Care Delivery\n"
+        ",handle1.bsky.social,Jane,Johnson,Example Health,United States,NY,New York,Cardiology,Oncology,Academic,Researcher,Health System\n",
         encoding="utf-8",
     )
 
@@ -451,6 +461,14 @@ def test_process_accepts_single_brandwatch_file_with_lookup_and_metadata(tmp_pat
     assert len(result) == 2
     assert set(result["Domain"]) == {"x.com", "bsky.app"}
     assert result.iloc[0]["DOL Yes/No"] == "Yes"
+    x_row = result.loc[result["Domain"] == "x.com"].iloc[0]
+    bsky_row = result.loc[result["Domain"] == "bsky.app"].iloc[0]
+    assert x_row["Classification"] == "Clinical"
+    assert x_row["Job Role"] == "Attending"
+    assert x_row["Ecosystem Type"] == "Care Delivery"
+    assert bsky_row["Classification"] == "Academic"
+    assert bsky_row["Job Role"] == "Researcher"
+    assert bsky_row["Ecosystem Type"] == "Health System"
 
 
 def test_process_handles_duplicate_bluesky_metadata_handles(tmp_path):

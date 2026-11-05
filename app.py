@@ -33,7 +33,7 @@ OUTPUT_COLUMNS = [
     # Enrichment / lookup columns
     "Name", "Institution", "NPI", "DOL Yes/No",
     "DOL Profile", "Lilly KOL", "Validated US?", "Continent", "Country", "State",
-    "City", "Specialty 1", "Specialty 2",
+    "City", "Specialty 1", "Specialty 2", "Classification", "Job Role", "Ecosystem Type",
 ]
 
 INPUT_NOT_AVAILABLE = "input not available"
@@ -261,9 +261,11 @@ def process(*args, **kwargs):
         meta = meta.rename(columns={
             "Medical Specialty 1": "Specialty 1",
             "Medical Specialty 2": "Specialty 2",
+            "Ecosystem": "Ecosystem Type",
         })
         meta_select = ["Name", "Institution", "NPI", "Validated US?",
                        "Continent", "Country", "State", "City", "Specialty 1", "Specialty 2",
+                       "Classification", "Job Role", "Ecosystem Type",
                        "_twitter_handle", "_bluesky_handle"]
         for c in meta_select:
             if c not in meta.columns:
@@ -284,7 +286,8 @@ def process(*args, **kwargs):
             mask = _as_bool_array(need_bluesky_lookup)
             bsky_lookup = meta.set_index("_bluesky_handle")[ ["Name", "Institution", "NPI", "Validated US?",
                                                                "Continent", "Country", "State", "City",
-                                                               "Specialty 1", "Specialty 2"] ]
+                                                               "Specialty 1", "Specialty 2", "Classification",
+                                                               "Job Role", "Ecosystem Type"] ]
             df_bsky_handles = df.loc[mask, "_handle"].fillna("")
             looked = df_bsky_handles.astype(str).str.lower().str.strip().map(
                 lambda h: _resolve_lookup_row(bsky_lookup, h)
@@ -310,6 +313,9 @@ def process(*args, **kwargs):
         df["City"] = INPUT_NOT_AVAILABLE
         df["Specialty 1"] = INPUT_NOT_AVAILABLE
         df["Specialty 2"] = INPUT_NOT_AVAILABLE
+        df["Classification"] = INPUT_NOT_AVAILABLE
+        df["Job Role"] = INPUT_NOT_AVAILABLE
+        df["Ecosystem Type"] = INPUT_NOT_AVAILABLE
 
     # --- Final output ---
     category_present = any(col in df.columns for col in CATEGORY_COLUMNS) or "Category Details" in df.columns
@@ -330,7 +336,8 @@ def process(*args, **kwargs):
         if col in ["DOL Yes/No", "DOL Profile", "Lilly KOL",
                    "Name", "Institution", "NPI", "Validated US?",
                    "Continent", "Country", "State", "City",
-                   "Specialty 1", "Specialty 2"]:
+                   "Specialty 1", "Specialty 2", "Classification",
+                   "Job Role", "Ecosystem Type"]:
             df[col] = INPUT_NOT_AVAILABLE
         else:
             df[col] = ""
